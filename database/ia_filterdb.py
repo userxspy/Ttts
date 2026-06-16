@@ -30,56 +30,40 @@ db = client[DATABASE_NAME]
 primary = db["Primary"]
 cloud   = db["Cloud"]
 archive = db["Archive"]
-actors  = db["Actors"]  # 🎭 नया: एक्टर प्रोफाइल के लिए डेटाबेस कलेक्शन
+actors  = db["Actors"]  # 🎭 एक्टर प्रोफाइल के लिए डेटाबेस कलेक्शन
 
 COLLECTIONS = {
     "primary": primary,
     "cloud":   cloud,
     "archive": archive,
-    "actors":  actors,   # 🔄 नया: मास्टर डिक्शनरी में सिंक किया
+    "actors":  actors,   
 }
 
 # ⚡ GLOBAL STATUS EXPENSIVE COUNT CACHE
 _stats_cache = None
 _stats_cache_time = 0
-STATS_CACHE_TTL = 60  # ६० सेकंड का सेफ कैशे बैरियर
+STATS_CACHE_TTL = 60  
 
 # ─────────────────────────────────────────────────────────
-# ⚡ INDEXES — Dynamic Configuration (No Index Bloat)
+# ⚡ INDEXES — Dynamic Configuration
 # ─────────────────────────────────────────────────────────
 async def ensure_indexes():
     for name, col in COLLECTIONS.items():
         try:
-            # 🛑 सेफ़्टी गॉर्ड: एक्टर्स कलेक्शन को इस मूवी लूप से बाहर रखें, वरना गलत इंडेक्स ब्लोट होगा
             if name == "actors":
                 continue
 
-            # ✅ कम्पाउंड टेक्स्ट इंडेक्स में से ब्लोट हटाया गया
             if USE_CAPTION_FILTER:
-                await col.create_index(
-                    [("file_name", "text"), ("caption", "text")],
-                    name=f"{name}_text"
-                )
+                await col.create_index([("file_name", "text"), ("caption", "text")], name=f"{name}_text")
             else:
-                await col.create_index(
-                    [("file_name", "text")],
-                    name=f"{name}_text"
-                )
+                await col.create_index([("file_name", "text")], name=f"{name}_text")
             
-            # रेगेक्स सर्च (COLLSCAN) से बचने के लिए सिंगल-फील्ड इंडेक्स जोड़ा गया
-            await col.create_index(
-                "file_name", 
-                name=f"{name}_filename_idx"
-            )
-            
+            await col.create_index("file_name", name=f"{name}_filename_idx")
             logger.info(f"✅ Fast Search & Non-Bloated Indexes OK: {name}")
         except Exception as e:
-            if "already exists" in str(e) or "IndexKeySpecsConflict" in str(e):
-                pass
-            else:
-                logger.warning(f"Index warning [{name}]: {e}")
+            if "already exists" in str(e) or "IndexKeySpecsConflict" in str(e): pass
+            else: logger.warning(f"Index warning [{name}]: {e}")
 
-    # ─── 🎭 एक्टर कलेक्शन का विशेष टेक्स्ट इंडेक्स (लूप के बाहर) ───
     try:
         await actors.create_index([("name", "text")], name="actors_name_text")
         logger.info("✅ Actor Profile System Indexes OK")
@@ -88,12 +72,11 @@ async def ensure_indexes():
             logger.warning(f"Actor Index warning: {e}")
 
 # ─────────────────────────────────────────────────────────
-# 📊 DB STATS — With Smart String-Type Query & 60s Cache Guard
+# 📊 DB STATS
 # ─────────────────────────────────────────────────────────
 async def db_count_documents():
     global _stats_cache, _stats_cache_time
     now = time.time()
-    
     if _stats_cache and (now - _stats_cache_time < STATS_CACHE_TTL):
         return _stats_cache
 
@@ -102,21 +85,12 @@ async def db_count_documents():
         c_task = cloud.estimated_document_count()
         a_task = archive.estimated_document_count()
         
-        # ✅ SCREENSHOT FIX 4 & 5: थंबनेल काउंट को एकदम सटीक बनाने के लिए सचमुच स्ट्रिंग-टाइप क्वेरी
-        thumb_query = {
-            "thumb_url": {
-                "$exists": True, 
-                "$type": "string",
-                "$ne": "NO_THUMB"
-            }
-        }
+        thumb_query = {"thumb_url": {"$exists": True, "$type": "string", "$ne": "NO_THUMB"}}
         pt_task = primary.count_documents(thumb_query)
         ct_task = cloud.count_documents(thumb_query)
         at_task = archive.count_documents(thumb_query)
 
-        p, c, a, pt, ct, at = await asyncio.gather(
-            p_task, c_task, a_task, pt_task, ct_task, at_task
-        )
+        p, c, a, pt, ct, at = await asyncio.gather(p_task, c_task, a_task, pt_task, ct_task, at_task)
         
         _stats_cache = {
             "primary": p, "cloud": c, "archive": a, "total": p + c + a,
@@ -126,61 +100,42 @@ async def db_count_documents():
         return _stats_cache
     except Exception as e:
         logger.error(f"Count Breakdown error: {e}")
-        return {
-            "primary": 0, "cloud": 0, "archive": 0, "total": 0,
-            "primary_thumb": 0, "cloud_thumb": 0, "archive_thumb": 0, "total_thumb": 0
-        }
+        return {"primary": 0, "cloud": 0, "archive": 0, "total": 0, "primary_thumb": 0, "cloud_thumb": 0, "archive_thumb": 0, "total_thumb": 0}
 
 # ─────────────────────────────────────────────────────────
-# 💾 SAVE FILE (Ghost Caption Deletion & Redundancy Free Engine)
+# 💾 SAVE FILE
 # ─────────────────────────────────────────────────────────
 async def save_file(media, collection_type="primary"):
     try:
         file_id = unpack_new_file_id(media.file_id)
-        if not file_id:
-            return "err"
+        if not file_id: return "err"
 
         f_name  = re.sub(r"@\w+|(_|\-|\.|\+)", " ", str(media.file_name or "")).strip()
         caption = re.sub(r"@\w+|(_|\-|\.|\+)", " ", str(media.caption  or "")).strip()
         file_type = type(media).__name__.lower()
-
         col = COLLECTIONS.get(collection_type, primary)
         
         existing_doc = await col.find_one({"_id": file_id}, {"file_ref": 1, "thumb_url": 1, "caption": 1})
-        
         if existing_doc:
-            if existing_doc.get("file_ref") == media.file_id:
-                return "dup"
-            
+            if existing_doc.get("file_ref") == media.file_id: return "dup"
             old_thumb = existing_doc.get("thumb_url")
             thumb_url = old_thumb if old_thumb and old_thumb != "NO_THUMB" else None
         else:
             thumb_url = None
 
-        update_set = {
-            "file_ref":  media.file_id,
-            "file_name": f_name,
-            "file_size": media.file_size,
-            "file_type": file_type,   
-        }
-        
-        if thumb_url:
-            update_set["thumb_url"] = thumb_url
+        update_set = {"file_ref":  media.file_id, "file_name": f_name, "file_size": media.file_size, "file_type": file_type}
+        if thumb_url: update_set["thumb_url"] = thumb_url
 
         update_payload = {"$set": update_set}
         unset_payload = {}
 
-        if USE_CAPTION_FILTER and caption:
-            update_set["caption"] = caption
-        else:
-            unset_payload["caption"] = ""
+        if USE_CAPTION_FILTER and caption: update_set["caption"] = caption
+        else: unset_payload["caption"] = ""
 
-        if unset_payload:
-            update_payload["$unset"] = unset_payload
+        if unset_payload: update_payload["$unset"] = unset_payload
 
         await col.update_one({"_id": file_id}, update_payload, upsert=True)
         return "suc"
-
     except Exception as e:
         logger.error(f"save_file error: {e}")
         return "err"
@@ -192,90 +147,67 @@ ALLOWED_SHORT = {"hd", "4k", "3d", "8k", "5.1", "7.1", "kg", "rr", "uhd", "hevc"
 
 def _build_regex(query: str):
     query = query.strip()
+    if not query: return None
     q_lower = query.lower()
     
-    if len(query) < 2 or (len(query) == 2 and q_lower not in ALLOWED_SHORT):
-        return None
+    if len(query) < 2 or (len(query) == 2 and q_lower not in ALLOWED_SHORT): return None
+    if ' ' not in query: raw = r'(\b|[\.\+\-_])' + re.escape(query) + r'(\b|[\.\+\-_])'
+    else: raw = re.escape(query).replace(r'\ ', r'.*[\s\.\+\-_]')
 
-    if ' ' not in query:
-        raw = r'(\b|[\.\+\-_])' + re.escape(query) + r'(\b|[\.\+\-_])'
-    else:
-        raw = re.escape(query).replace(r'\ ', r'.*[\s\.\+\-_]')
-
-    try:
-        return re.compile(raw, flags=re.IGNORECASE)
-    except Exception:
-        return re.compile(re.escape(query), flags=re.IGNORECASE)
+    try: return re.compile(raw, flags=re.IGNORECASE)
+    except Exception: return re.compile(re.escape(query), flags=re.IGNORECASE)
 
 # ─────────────────────────────────────────────────────────
-# 🚀 SMART SEARCH (Instant Response Projection Engine)
+# 🚀 SMART SEARCH
 # ─────────────────────────────────────────────────────────
 async def _search(col, raw_query: str, regex, offset: int, limit: int, lang=None, bypass_count=False):
-    clean_query = raw_query.replace('"', '').replace("'", "")
-    words = clean_query.split()
+    clean_query = raw_query.replace('"', '').replace("'", "").strip()
+    words = clean_query.split() if clean_query else []
     strict_query = " ".join(f'"{word}"' for word in words) if words else ""
 
     if strict_query:
         text_flt = {"$text": {"$search": strict_query}}
-        if lang:
-            text_flt = {"$and": [text_flt, {"file_name": re.compile(lang, re.IGNORECASE)}]}
+        if lang: text_flt = {"$and": [text_flt, {"file_name": re.compile(lang, re.IGNORECASE)}]}
 
         cursor = col.find(text_flt, {"_id": 1, "file_name": 1, "file_size": 1, "file_type": 1, "file_ref": 1, "caption": 1, "thumb_url": 1, "score": {"$meta": "textScore"}})
         cursor.sort([("score", {"$meta": "textScore"})])
         cursor.skip(offset).limit(limit)
         docs = await cursor.to_list(length=limit)
-        
         if docs:
-            for doc in docs:
-                doc["file_id"] = doc["_id"] 
+            for doc in docs: doc["file_id"] = doc["_id"] 
             count = 0 if bypass_count else await col.count_documents(text_flt)
             return docs, count
 
-    if not regex:
-        return [], 0
-
-    if USE_CAPTION_FILTER:
-        reg_flt = {"$or": [{"file_name": regex}, {"caption": regex}]}
-    else:
-        reg_flt = {"file_name": regex}
-
-    if lang:
-        reg_flt = {"$and": [reg_flt, {"file_name": re.compile(lang, re.IGNORECASE)}]}
+    if not regex: return [], 0
+    reg_flt = {"$or": [{"file_name": regex}, {"caption": regex}]} if USE_CAPTION_FILTER else {"file_name": regex}
+    if lang: reg_flt = {"$and": [reg_flt, {"file_name": re.compile(lang, re.IGNORECASE)}]}
 
     cursor = col.find(reg_flt, {"_id": 1, "file_name": 1, "file_size": 1, "file_type": 1, "file_ref": 1, "caption": 1, "thumb_url": 1}).sort('_id', -1)
     cursor.skip(offset).limit(limit)
     docs = await cursor.to_list(length=limit)
-    for doc in docs:
-        doc["file_id"] = doc["_id"]
+    for doc in docs: doc["file_id"] = doc["_id"]
 
     count = 0 if bypass_count else (await col.count_documents(reg_flt) if docs else 0)
     return docs, count
 
 # ─────────────────────────────────────────────────────────
-# 🌐 PUBLIC SEARCH API — Adaptive Result Sync (Bot 12 vs Web 21)
+# 🌐 PUBLIC SEARCH API
 # ─────────────────────────────────────────────────────────
 async def get_search_results(query, max_results, offset=0, lang=None, collection_type="primary", bypass_count=False):
-    if not query:
-        return [], "", 0, collection_type
-
+    if not query: return [], "", 0, collection_type
     raw_query  = str(query).strip()
     regex      = _build_regex(raw_query)
     
-    clean_query = raw_query.replace('"', '').replace("'", "")
-    if not clean_query.split() and not regex:
+    if not raw_query.replace('"', '').replace("'", "").strip().split() and not regex:
         return [], "", 0, collection_type
 
-    results    = []
-    total      = 0
-    actual_src = collection_type
+    results, total, actual_src = [], 0, collection_type
 
     if collection_type == "all":
         for src, col in [("primary", primary), ("cloud", cloud), ("archive", archive)]:
             docs, cnt = await _search(col, raw_query, regex, offset, max_results, lang, bypass_count=bypass_count)
             if docs:
-                results    = docs
-                total      = cnt
-                actual_src = src
+                results, total, actual_src = docs, cnt, src
                 break  
     else:
         col = COLLECTIONS.get(collection_type, primary)
@@ -292,7 +224,7 @@ async def get_search_results(query, max_results, offset=0, lang=None, collection
     return results, next_offset, total, actual_src
 
 # ─────────────────────────────────────────────────────────
-# 🗑 DELETE FILES (Sequential Lock Guard)
+# 🗑 DELETE FILES 
 # ─────────────────────────────────────────────────────────
 async def delete_files(query, collection_type="all"):
     deleted = 0
@@ -305,31 +237,21 @@ async def delete_files(query, collection_type="all"):
             return deleted
 
         regex = _build_regex(str(query))
-        if not regex:
-            return 0
-
+        if not regex: return 0
         flt   = {"file_name": regex}
         cols  = [col for name, col in COLLECTIONS.items() if (collection_type == "all" or name == collection_type) and name != "actors"]
-
         for col in cols:
             res = await col.delete_many(flt)
             deleted += res.deleted_count
-
         return deleted
     except Exception as e:
         logger.error(f"delete_files error: {e}")
         return deleted
 
-# ─────────────────────────────────────────────
-# 📂 GET FILE DETAILS (Strict Token Security Lookup)
-# ─────────────────────────────────────────────
 async def get_file_details(file_id):
     try:
         for col in [primary, cloud, archive]:
-            doc = await col.find_one(
-                {"_id": file_id},
-                {"_id": 1, "file_name": 1, "file_size": 1, "file_ref": 1, "caption": 1, "thumb_url": 1}
-            )
+            doc = await col.find_one({"_id": file_id}, {"_id": 1, "file_name": 1, "file_size": 1, "file_ref": 1, "caption": 1, "thumb_url": 1})
             if doc:
                 doc["file_id"] = doc["_id"]  
                 return doc
@@ -338,60 +260,50 @@ async def get_file_details(file_id):
         logger.error(f"get_file_details error: {e}")
         return None
 
-# ─────────────────────────────────────────────────────────
-# 🗑 UNPACK/ENCODE UTILS
-# ─────────────────────────────────────────────────────────
 def encode_file_id(s: bytes) -> str:
     r, n = b"", 0
     for i in s + bytes([22]) + bytes([4]):
         if i == 0: n += 1
         else:
-            if n:
-                r += b"\x00" + bytes([n])
-                n  = 0
+            if n: r += b"\x00" + bytes([n]); n = 0
             r += bytes([i])
     return base64.urlsafe_b64encode(r).decode().rstrip("=")
 
 def unpack_new_file_id(new_file_id: str):
     try:
         decoded = FileId.decode(new_file_id)
-        return encode_file_id(
-            pack(
-                "<iiqq",
-                int(decoded.file_type),
-                decoded.dc_id,
-                decoded.media_id,
-                decoded.access_hash,
-            )
-        )
+        return encode_file_id(pack("<iiqq", int(decoded.file_type), decoded.dc_id, decoded.media_id, decoded.access_hash))
     except Exception as e:
         logger.error(f"unpack_new_file_id error: {e}")
         return None
 
 # ─────────────────────────────────────────────────────────
-# 🎭 ACTOR TAGS MULTI-PIPELINE OR SEARCH ENGINE (100% ISOLATED)
+# 🎭 ACTOR TAGS MULTI-PIPELINE SEARCH ENGINE (100% ISOLATED & DOUBLE CHECKED)
 # ─────────────────────────────────────────────────────────
 async def get_actor_search_results(actor_name, tags_list, max_results, offset=0, collection_type="all"):
-    """नाम और सभी कस्टमाइज्ड टैग्स को मिलाकर एक मास्टर Regex पैटर्न पर सर्च करता है ताकि कोई अन्य कंपोनेंट प्रभावित न हो।"""
-    all_terms = [actor_name.strip()]
+    """नाम और सभी कस्टमाइज्ड टैग्स को मिलाकर सिंक करता है ताकि वाइल्डकार्ड क्रैश न हो।"""
+    all_terms = []
+    
+    if actor_name and str(actor_name).strip():
+        all_terms.append(str(actor_name).strip())
+        
     if tags_list and isinstance(tags_list, list):
         for t in tags_list:
-            if t.strip():
-                all_terms.append(t.strip())
+            if t and str(t).strip():
+                all_terms.append(str(t).strip())
                 
-    escaped_terms = [re.escape(term) for term in all_terms]
+    if not all_terms:
+        return [], ""
+                
+    escaped_terms = [re.escape(term) for term in all_terms if term]
     combined_raw = r'(' + '|'.join(escaped_terms) + r')'
     
     try:
         regex = re.compile(combined_raw, flags=re.IGNORECASE)
     except Exception:
-        regex = re.compile(re.escape(actor_name), flags=re.IGNORECASE)
+        regex = re.compile(re.escape(actor_name) if actor_name else "NO_ACTOR_MATCH_FOUND", flags=re.IGNORECASE)
         
-    if USE_CAPTION_FILTER:
-        reg_flt = {"$or": [{"file_name": regex}, {"caption": regex}]}
-    else:
-        reg_flt = {"file_name": regex}
-        
+    reg_flt = {"$or": [{"file_name": regex}, {"caption": regex}]} if USE_CAPTION_FILTER else {"file_name": regex}
     results = []
     cols = [primary, cloud, archive] if collection_type == "all" else [COLLECTIONS.get(collection_type, primary)]
     
@@ -402,7 +314,6 @@ async def get_actor_search_results(actor_name, tags_list, max_results, offset=0,
         if docs:
             for doc in docs:
                 doc["file_id"] = doc["_id"]
-                # ✅ FIX: DB collection name "Primary" → lowercase "primary" for CSS class sync
                 doc["source_col"] = col.name.lower()
             results.extend(docs)
             if len(results) >= max_results:
@@ -411,7 +322,6 @@ async def get_actor_search_results(actor_name, tags_list, max_results, offset=0,
 
     has_more = len(results) == max_results
     next_offset = offset + max_results if has_more else ""
-    
     return results, next_offset
 
 # ─────────────────────────────────────────────────────────
@@ -430,18 +340,11 @@ async def delete_gallery_image_by_index(actor_id, index: int):
     """गैलरी एरे में से स्पेसिफिक इंडेक्स वाली इमेज को पुल (हटा) करता है।"""
     try:
         doc = await actors.find_one({"_id": ObjectId(actor_id)})
-        if not doc or "gallery" not in doc:
-            return False
-        
+        if not doc or "gallery" not in doc: return False
         gallery = doc["gallery"]
-        if index < 0 or index >= len(gallery):
-            return False
-        
+        if index < 0 or index >= len(gallery): return False
         target_tg_id = gallery[index]
-        res = await actors.update_one(
-            {"_id": ObjectId(actor_id)},
-            {"$pull": {"gallery": target_tg_id}}
-        )
+        res = await actors.update_one({"_id": ObjectId(actor_id)}, {"$pull": {"gallery": target_tg_id}})
         return bool(res.modified_count)
     except Exception as e:
         logger.error(f"delete_gallery_image error: {e}")
