@@ -16,65 +16,117 @@ async def actors_directory_page(req):
     role, _ = await get_auth(req)
     if not role: return web.HTTPFound('/login')
     
-    all_actors = await actors.find({}).sort("created_at", -1).to_list(length=200)
+    # 20 की लिमिट लगाई गई है, 21वां चेक करने के लिए कि Next बटन इनेबल करना है या नहीं
+    all_actors = await actors.find({}).sort("created_at", -1).limit(21).to_list(length=21)
+    has_next_init = len(all_actors) > 20
+    all_actors = all_actors[:20]
+    
     admin_btn = f'''<div style="margin-bottom:20px; display:flex; justify-content:flex-end;"><a href="/admin/create_actor" style="background:var(--accent); color:#fff; padding:10px 20px; border-radius:8px; font-weight:700; text-decoration:none; font-size:14px; box-shadow:0 4px 15px rgba(229,9,20,0.3);">➕ Create New Profile</a></div>''' if role == 'admin' else ""
     
-    # Search Bar UI (Universal)
+    # Premium UI for Search & Filter
     search_ui = '''
-    <div style="background:var(--card); border:1px solid var(--border); padding:15px; border-radius:10px; margin-bottom:25px; display:flex; flex-wrap:wrap; gap:12px; align-items:center;">
-        <input type="text" id="dir_q" placeholder="Search Actors, Apps, Websites..." style="flex:1; min-width:200px; background:var(--bg3); border:1px solid var(--border); padding:12px; color:var(--text); border-radius:8px; outline:none; font-family:inherit; font-weight:600;">
+    <style>
+        .dir-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; }
+        @media(min-width: 768px) { .dir-grid { grid-template-columns: repeat(5, 1fr); gap: 20px; } }
         
-        <select id="dir_cat" style="background:var(--bg3); border:1px solid var(--border); padding:12px; color:var(--text); border-radius:8px; outline:none; font-weight:600; cursor:pointer;" onchange="searchDirectory()">
-            <option value="all">📂 All Categories</option>
-            <option value="actor">🎭 Actors Only</option>
-            <option value="app">📱 Apps Only</option>
-            <option value="website">🌐 Websites Only</option>
-        </select>
+        .search-box { background:var(--card); border:1px solid var(--border); padding:16px; border-radius:12px; margin-bottom:25px; box-shadow:0 4px 15px rgba(0,0,0,0.1); }
+        .s-row-1 { display: flex; gap: 10px; margin-bottom: 12px; }
+        .s-input { flex: 1; background:var(--bg3); border:1px solid var(--border); padding:12px 16px; color:var(--text); border-radius:8px; outline:none; font-family:inherit; font-weight:600; font-size:14px; transition:0.2s; }
+        .s-input:focus { border-color:var(--accent); }
+        .s-btn { background:var(--accent); color:#fff; border:none; padding:0 24px; border-radius:8px; font-weight:800; cursor:pointer; transition:0.2s; white-space:nowrap; }
+        .s-btn:hover { background:var(--accent-hover); transform:scale(1.02); }
         
-        <select id="dir_mode" style="background:var(--bg3); border:1px solid var(--border); padding:12px; color:var(--text); border-radius:8px; outline:none; font-weight:600; cursor:pointer;" onchange="searchDirectory()">
-            <option value="poster">🖼️ Poster Mode</option>
-            <option value="text">📄 Text Mode</option>
-        </select>
+        .s-row-2 { display: flex; gap: 10px; flex-wrap:wrap; }
+        .s-select { flex: 1; min-width:140px; background:var(--bg3); border:1px solid var(--border); padding:10px 14px; color:var(--text); border-radius:8px; outline:none; font-weight:700; cursor:pointer; appearance:none; -webkit-appearance:none; background-image:url("data:image/svg+xml;charset=US-ASCII,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20width%3D%22292.4%22%20height%3D%22292.4%22%3E%3Cpath%20fill%3D%22%23999%22%20d%3D%22M287%2069.4a17.6%2017.6%200%200%200-13-5.4H18.4c-5%200-9.3%201.8-12.9%205.4A17.6%2017.6%200%200%200%200%2082.2c0%205%201.8%209.3%205.4%2012.9l128%20127.9c3.6%203.6%207.8%205.4%2012.8%205.4s9.2-1.8%2012.8-5.4L287%2095c3.5-3.5%205.4-7.8%205.4-12.8%200-5-1.9-9.2-5.5-12.8z%22%2F%3E%3C%2Fsvg%3E"); background-repeat:no-repeat; background-position:right 12px top 50%; background-size:10px auto; font-size:13px; transition:0.2s; }
+        .s-select:focus { border-color:var(--accent); }
         
-        <button onclick="searchDirectory()" style="background:var(--accent); color:#fff; border:none; padding:12px 24px; border-radius:8px; font-weight:800; cursor:pointer; transition:0.2s;">Search</button>
+        .pg-bar { display:flex; justify-content:center; align-items:center; gap:15px; margin-top:30px; }
+        .pg-btn { background:var(--bg4); color:var(--text); border:1px solid var(--border); padding:8px 20px; border-radius:6px; font-weight:700; cursor:pointer; font-size:13px; transition:0.2s; }
+        .pg-btn:hover:not(:disabled) { background:var(--accent); color:#fff; border-color:var(--accent); }
+        .pg-btn:disabled { opacity:0.4; cursor:not-allowed; }
+        .pg-info { color:var(--text); font-weight:800; font-size:14px; background:var(--bg3); padding:6px 14px; border-radius:6px; border:1px solid var(--border); }
+        
+        .act-card { background:var(--card); border:1px solid var(--border); border-radius:10px; overflow:hidden; transition:0.2s; cursor:pointer; box-shadow:0 4px 10px rgba(0,0,0,0.2); }
+        .act-card:hover { transform:translateY(-4px); border-color:rgba(229,9,20,0.5); }
+    </style>
+
+    <div class="search-box">
+        <div class="s-row-1">
+            <input type="text" id="dir_q" class="s-input" placeholder="Search Actors, Apps, Websites...">
+            <button class="s-btn" onclick="resetDir(); searchDirectory()">Search</button>
+        </div>
+        <div class="s-row-2">
+            <select id="dir_cat" class="s-select" onchange="resetDir(); searchDirectory()">
+                <option value="all">📂 All Categories</option>
+                <option value="actor">🎭 Actors Only</option>
+                <option value="app">📱 Apps Only</option>
+                <option value="website">🌐 Websites Only</option>
+            </select>
+            <select id="dir_mode" class="s-select" onchange="resetDir(); searchDirectory()">
+                <option value="poster">🖼️ Poster Mode</option>
+                <option value="text">📄 Text Mode</option>
+            </select>
+        </div>
     </div>
     '''
 
-    # Initial Pre-rendered Grid
     act_items = ""
     for a in all_actors:
         cat = a.get("category", "actor")
         i = "🎭" if cat == "actor" else "📱" if cat == "app" else "🌐"
-        act_items += f'<div style="background:var(--card); border:1px solid var(--border); border-radius:10px; overflow:hidden; transition:0.2s; cursor:pointer;" onclick="window.location.href=\'/actor/{str(a["_id"])}\'"><div style="position:relative; padding-top:135%; background:var(--bg3); overflow:hidden;"><img src="/api/actor/photo?id={str(a["_id"])}&v={int(a.get("photo_updated_at") or a.get("created_at") or 0)}" style="position:absolute; inset:0; width:100%; height:100%; object-fit:cover;" loading="lazy"><div style="position:absolute; top:8px; left:8px; background:rgba(0,0,0,0.7); color:#fff; font-size:10px; padding:3px 6px; border-radius:4px; font-weight:bold;">{i} {cat.capitalize()}</div></div><div style="padding:12px; text-align:center;"><div style="font-size:14px; font-weight:700; color:var(--text); text-overflow:ellipsis; overflow:hidden; white-space:nowrap;">{html.escape(a.get("name", ""))}</div></div></div>'
+        act_items += f'<div class="act-card" onclick="window.location.href=\'/actor/{str(a["_id"])}\'"><div style="position:relative; padding-top:135%; background:var(--bg3); overflow:hidden;"><img src="/api/actor/photo?id={str(a["_id"])}&v={int(a.get("photo_updated_at") or a.get("created_at") or 0)}" style="position:absolute; inset:0; width:100%; height:100%; object-fit:cover;" loading="lazy"><div style="position:absolute; top:8px; left:8px; background:rgba(0,0,0,0.8); border:1px solid rgba(255,255,255,0.1); color:#fff; font-size:9px; padding:4px 8px; border-radius:4px; font-weight:800; backdrop-filter:blur(4px);">{i} {cat.capitalize()}</div></div><div style="padding:10px; text-align:center;"><div style="font-size:13px; font-weight:800; color:var(--text); text-overflow:ellipsis; overflow:hidden; white-space:nowrap;">{html.escape(a.get("name", ""))}</div></div></div>'
     
-    initial_grid = f'<div id="dir_grid_container" style="display:grid; grid-template-columns:repeat(auto-fill, minmax(160px, 1fr)); gap:20px;">{act_items}</div>' if all_actors else '<div id="dir_grid_container" style="color:var(--muted); text-align:center; padding:60px 20px;">📇 No profiles found.</div>'
+    initial_grid = f'<div id="dir_grid_container" class="dir-grid">{act_items}</div>' if all_actors else '<div id="dir_grid_container" style="color:var(--muted); text-align:center; padding:60px 20px;">📇 No profiles found.</div>'
+    
+    has_nxt_str = "true" if has_next_init else "false"
 
-    js_logic = '''
+    js_logic = f'''
+    <div class="pg-bar" id="dir_pg_box" style="display:none;">
+        <button class="pg-btn" id="dir_pBtn" onclick="prevDir()" disabled>Previous</button>
+        <span class="pg-info" id="dir_pgInfo">Page 1</span>
+        <button class="pg-btn" id="dir_nBtn" onclick="nextDir()">Next</button>
+    </div>
+
     <script>
-    async function searchDirectory() {
+    var dirOffset = 0; var dirLimit = 20; var dirPage = 1;
+    var hasNext = {has_nxt_str};
+    
+    document.addEventListener("DOMContentLoaded", () => {{ updatePgUI(); }});
+
+    async function searchDirectory() {{
         var q = document.getElementById('dir_q').value.trim();
         var cat = document.getElementById('dir_cat').value;
         var mode = document.getElementById('dir_mode').value;
         var grid = document.getElementById('dir_grid_container');
         
-        grid.innerHTML = '<div style="grid-column:1/-1; text-align:center; padding:40px; color:var(--muted);">Searching Directory...</div>';
-        try {
-            var res = await fetch('/api/directory/search?q=' + encodeURIComponent(q) + '&cat=' + cat + '&mode=' + mode);
+        grid.innerHTML = '<div style="grid-column:1/-1; text-align:center; padding:40px; color:var(--muted); font-weight:700;">🔄 Filtering Directory...</div>';
+        try {{
+            var res = await fetch('/api/directory/search?q=' + encodeURIComponent(q) + '&cat=' + cat + '&mode=' + mode + '&offset=' + dirOffset);
             var data = await res.json();
             grid.innerHTML = data.html;
+            hasNext = data.has_next;
             
-            if(mode === 'text') {
-                grid.style.display = 'flex';
-                grid.style.flexDirection = 'column';
-                grid.style.gap = '10px';
-            } else {
-                grid.style.display = 'grid';
-                grid.style.gridTemplateColumns = 'repeat(auto-fill, minmax(160px, 1fr))';
-                grid.style.gap = '20px';
-            }
-        } catch(e) { grid.innerHTML = '<div style="grid-column:1/-1; text-align:center; padding:40px; color:var(--accent);">Search Error!</div>'; }
-    }
-    document.getElementById('dir_q').addEventListener('keydown', function(e) { if(e.key === 'Enter') searchDirectory(); });
+            if(mode === 'text') {{
+                grid.style.display = 'flex'; grid.style.flexDirection = 'column'; grid.style.gap = '10px';
+            }} else {{
+                grid.style.display = 'grid'; grid.style.gap = '';
+            }}
+            updatePgUI();
+        }} catch(e) {{ grid.innerHTML = '<div style="grid-column:1/-1; text-align:center; color:red; font-weight:bold;">Search Error!</div>'; }}
+    }}
+    
+    function updatePgUI() {{
+        var box = document.getElementById('dir_pg_box');
+        if (dirOffset === 0 && !hasNext) {{ box.style.display = 'none'; }} else {{ box.style.display = 'flex'; }}
+        document.getElementById('dir_pBtn').disabled = (dirOffset === 0);
+        document.getElementById('dir_nBtn').disabled = !hasNext;
+        document.getElementById('dir_pgInfo').innerText = 'Page ' + dirPage;
+    }}
+    
+    function resetDir() {{ dirOffset = 0; dirPage = 1; }}
+    function nextDir() {{ if(hasNext) {{ dirOffset += dirLimit; dirPage++; searchDirectory(); window.scrollTo(0, 50); }} }}
+    function prevDir() {{ if(dirOffset > 0) {{ dirOffset = Math.max(0, dirOffset - dirLimit); dirPage--; searchDirectory(); window.scrollTo(0, 50); }} }}
+    document.getElementById('dir_q').addEventListener('keydown', function(e) {{ if(e.key === 'Enter') {{ resetDir(); searchDirectory(); }} }});
     </script>
     '''
 
@@ -82,7 +134,7 @@ async def actors_directory_page(req):
     return build_page("Directory Catalog - Fast Finder", page_body, "", "actors", role)
 
 # ─────────────────────────────────────────────────────────
-# 🔍 API: DIRECTORY UNIVERSAL SEARCH (Live AJAX)
+# 🔍 API: DIRECTORY UNIVERSAL SEARCH (WITH PAGINATION)
 # ─────────────────────────────────────────────────────────
 @actor_routes.get('/api/directory/search')
 async def api_directory_search(req):
@@ -92,30 +144,35 @@ async def api_directory_search(req):
     q = req.query.get("q", "").strip()
     cat = req.query.get("cat", "all")
     mode = req.query.get("mode", "poster")
+    offset = int(req.query.get("offset", 0))
+    lim = 20
     
     query = {}
     if cat != "all": query["category"] = cat
     if q: query["$or"] = [{"name": {"$regex": q, "$options": "i"}}, {"tags": {"$regex": q, "$options": "i"}}]
         
-    docs = await actors.find(query).sort("created_at", -1).to_list(length=200)
+    docs = await actors.find(query).sort("created_at", -1).skip(offset).limit(lim + 1).to_list(length=lim + 1)
+    
+    has_next = len(docs) > lim
+    docs = docs[:lim]
     
     if not docs:
-        return web.json_response({"html": '<div style="grid-column:1/-1; color:var(--muted); text-align:center; padding:60px 20px;">📇 No profiles matching your filters found.</div>'})
+        return web.json_response({"html": '<div style="grid-column:1/-1; color:var(--muted); text-align:center; padding:60px 20px;">📇 No profiles matching your filters found.</div>', "has_next": False})
         
     html_out = ""
     if mode == "text":
         for a in docs:
             c = a.get("category", "actor")
             i = "🎭" if c == "actor" else "📱" if c == "app" else "🌐"
-            html_out += f'''<div style="background:var(--card); border:1px solid var(--border); padding:15px; border-radius:8px; display:flex; justify-content:space-between; align-items:center; cursor:pointer; transition:0.2s;" onclick="window.location.href=\'/actor/{str(a["_id"])}\'" onmouseover="this.style.borderColor='var(--accent)'" onmouseout="this.style.borderColor='var(--border)'"><div style="font-weight:700; color:var(--text); font-size:15px;">{html.escape(a.get("name",""))}</div><div style="background:var(--bg3); padding:4px 10px; border-radius:6px; font-size:12px; font-weight:bold; color:var(--muted);">{i} {c.capitalize()}</div></div>'''
+            html_out += f'''<div style="background:var(--card); border:1px solid var(--border); padding:15px; border-radius:8px; display:flex; justify-content:space-between; align-items:center; cursor:pointer; transition:0.2s;" onclick="window.location.href=\'/actor/{str(a["_id"])}\'" onmouseover="this.style.borderColor='var(--accent)'" onmouseout="this.style.borderColor='var(--border)'"><div style="font-weight:800; color:var(--text); font-size:14px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:65%;">{html.escape(a.get("name",""))}</div><div style="background:var(--bg3); padding:4px 10px; border-radius:6px; font-size:11px; font-weight:800; color:var(--muted); white-space:nowrap; border:1px solid var(--border);">{i} {c.capitalize()}</div></div>'''
     else:
         for a in docs:
             c = a.get("category", "actor")
             i = "🎭" if c == "actor" else "📱" if c == "app" else "🌐"
             v = int(a.get("photo_updated_at") or a.get("created_at") or 0)
-            html_out += f'''<div style="background:var(--card); border:1px solid var(--border); border-radius:10px; overflow:hidden; transition:0.2s; cursor:pointer;" onclick="window.location.href=\'/actor/{str(a["_id"])}\'"><div style="position:relative; padding-top:135%; background:var(--bg3); overflow:hidden;"><img src="/api/actor/photo?id={str(a["_id"])}&v={v}" style="position:absolute; inset:0; width:100%; height:100%; object-fit:cover;" loading="lazy"><div style="position:absolute; top:8px; left:8px; background:rgba(0,0,0,0.7); color:#fff; font-size:10px; padding:3px 6px; border-radius:4px; font-weight:bold;">{i} {c.capitalize()}</div></div><div style="padding:12px; text-align:center;"><div style="font-size:14px; font-weight:700; color:var(--text); text-overflow:ellipsis; overflow:hidden; white-space:nowrap;">{html.escape(a.get("name", ""))}</div></div></div>'''
+            html_out += f'''<div class="act-card" onclick="window.location.href=\'/actor/{str(a["_id"])}\'"><div style="position:relative; padding-top:135%; background:var(--bg3); overflow:hidden;"><img src="/api/actor/photo?id={str(a["_id"])}&v={v}" style="position:absolute; inset:0; width:100%; height:100%; object-fit:cover;" loading="lazy"><div style="position:absolute; top:8px; left:8px; background:rgba(0,0,0,0.8); border:1px solid rgba(255,255,255,0.1); color:#fff; font-size:9px; padding:4px 8px; border-radius:4px; font-weight:800; backdrop-filter:blur(4px);">{i} {c.capitalize()}</div></div><div style="padding:10px; text-align:center;"><div style="font-size:13px; font-weight:800; color:var(--text); text-overflow:ellipsis; overflow:hidden; white-space:nowrap;">{html.escape(a.get("name", ""))}</div></div></div>'''
             
-    return web.json_response({"html": html_out})
+    return web.json_response({"html": html_out, "has_next": has_next})
 
 
 # ─────────────────────────────────────────────────────────
