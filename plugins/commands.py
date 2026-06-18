@@ -8,7 +8,7 @@ from hydrogram import Client, filters, enums
 from hydrogram.types import InlineKeyboardButton, InlineKeyboardMarkup, WebAppInfo
 
 from Script import script
-# ✅ FIX: actors कलेक्शन को इम्पोर्ट किया गया ताकि हम डायरेक्टरी की गिनती कर सकें
+# ✅ FIX: actors कलेक्शन को इम्पोर्ट किया गया
 from database.ia_filterdb import db_count_documents, get_file_details, delete_files, actors
 from database.users_chats_db import db
 
@@ -44,7 +44,6 @@ MINI_APP_URL = _build_mini_app_url(URL)
 # ─────────────────────────────────────────────
 @Client.on_message(filters.command("start") & filters.incoming)
 async def start(client, message):
-    # 1. Connected Chat Groups Sync Route
     if message.chat.type in [enums.ChatType.GROUP, enums.ChatType.SUPERGROUP]:
         if not await db.get_chat(message.chat.id):
             total = await client.get_chat_members_count(message.chat.id)
@@ -57,7 +56,6 @@ async def start(client, message):
             f"<b>Hey {message.from_user.mention}, <i>{get_wish()}</i>\nHow can I help you?</b>"
         )
 
-    # 2. Private Inbox Context Protection Route
     if REACTIONS:
         try: await message.react(random.choice(REACTIONS), big=True)
         except: pass
@@ -68,7 +66,6 @@ async def start(client, message):
             message.from_user.mention, message.from_user.id
         ))
 
-    # स्ट्रिक्ट प्रीमियम मॉडल लॉक - फ्री यूज़र्स को तुरंत UPI सब्सक्रिप्शन लॉक स्क्रीन फ्लैश करें
     if IS_PREMIUM and message.from_user.id not in ADMINS and not await is_premium(message.from_user.id, client):
         return await message.reply_photo(
             random.choice(PICS),
@@ -78,7 +75,6 @@ async def start(client, message):
             ]])
         )
 
-    # 3. Secure File Delivery Channel Pipeline (start=file_id)
     if len(message.command) > 1 and message.command[1] != "premium":
         try:
             parts = message.command[1].split("_")
@@ -130,7 +126,6 @@ async def start(client, message):
             return
         return
 
-    # 4. Default Authenticated Private Main Menu
     btn = [
         [InlineKeyboardButton("🍿 Open Mini App", web_app=WebAppInfo(url=MINI_APP_URL))],
         [InlineKeyboardButton("+ Add to Group +", url=f"https://t.me/{temp.U_NAME}?startgroup=start")],
@@ -147,45 +142,62 @@ async def start(client, message):
 
 
 # ─────────────────────────────────────────────
-# 📊 /stats COMMAND HANDLER (Admin Only)
+# 📊 /stats COMMAND HANDLER (Admin Only) - 100% SECURE FAIL-SAFE
 # ─────────────────────────────────────────────
 @Client.on_message(filters.command("stats") & filters.user(ADMINS))
 async def stats(_, message):
     msg = await message.reply("🔄 Fetching Advanced Database Metrics...")
-    files, users, chats, premium = await asyncio.gather(
-        db_count_documents(),
-        db.total_users_count(),
-        db.total_chat_count(),
-        db.premium.count_documents({"status.premium": True})
-    )
     
-    # ✅ FIX: Universal Directory Stats Calculation
     try:
-        tot_dir = await actors.count_documents({})
-        app_dir = await actors.count_documents({"category": "app"})
-        web_dir = await actors.count_documents({"category": "website"})
-        act_dir = tot_dir - app_dir - web_dir
-    except:
-        tot_dir = app_dir = web_dir = act_dir = 0
-    
-    stats_text = script.STATUS_TXT.format(
-        users, chats, premium,
-        files['total'],
-        files['primary'], files['primary_thumb'],
-        files['cloud'], files['cloud_thumb'],
-        files['archive'], files['archive_thumb'],
-        files['total_thumb'],
-        get_readable_time(time_now() - temp.START_TIME)
-    )
-    
-    # ✅ FIX: Appending Directory Stats to main text
-    stats_text += f"\n\n🗂️ **Universal Directory:**\n├ 🎭 Actors: {act_dir}\n├ 📱 Apps: {app_dir}\n├ 🌐 Websites: {web_dir}\n└ 📊 Total Profiles: {tot_dir}"
-    
-    buttons = [
-        [InlineKeyboardButton("🔄 WARMUP THUMBNAILS", callback_data="warmup_trigger_all")],
-        [InlineKeyboardButton("❌ CLOSE PANEL", callback_data=f"close_{message.from_user.id}")]
-    ]
-    await msg.edit(stats_text, reply_markup=InlineKeyboardMarkup(buttons))
+        # 1. Fetching File DB Stats Safely
+        try:
+            files = await db_count_documents()
+            f = files if isinstance(files, dict) else {}
+        except Exception as e:
+            f = {}
+            logger.error(f"File Stats Error: {e}")
+
+        # 2. Fetching User DB Stats Safely
+        try: users = await db.total_users_count()
+        except: users = 0
+
+        try: chats = await db.total_chat_count()
+        except: chats = 0
+
+        try: premium = await db.premium.count_documents({"status.premium": True})
+        except: premium = 0
+
+        # 3. Fetching Universal Directory Stats Safely
+        try:
+            tot_dir = await actors.count_documents({})
+            app_dir = await actors.count_documents({"category": "app"})
+            web_dir = await actors.count_documents({"category": "website"})
+            act_dir = tot_dir - app_dir - web_dir
+        except Exception as e:
+            tot_dir = app_dir = web_dir = act_dir = 0
+            logger.error(f"Directory Stats Error: {e}")
+
+        # 4. Rendering the UI
+        stats_text = script.STATUS_TXT.format(
+            users, chats, premium,
+            f.get('total', 0),
+            f.get('primary', 0), f.get('primary_thumb', 0),
+            f.get('cloud', 0), f.get('cloud_thumb', 0),
+            f.get('archive', 0), f.get('archive_thumb', 0),
+            tot_dir, act_dir, app_dir, web_dir,
+            f.get('total_thumb', 0),
+            get_readable_time(time_now() - temp.START_TIME)
+        )
+
+        buttons = [
+            [InlineKeyboardButton("🔄 WARMUP THUMBNAILS", callback_data="warmup_trigger_all")],
+            [InlineKeyboardButton("❌ CLOSE PANEL", callback_data=f"close_{message.from_user.id}")]
+        ]
+        await msg.edit(stats_text, reply_markup=InlineKeyboardMarkup(buttons))
+        
+    except Exception as ex:
+        # अगर कोई बड़ा Python एरर आता है, तो बॉट यहीं पर मैसेज एडिट करके एरर दिखा देगा
+        await msg.edit(f"❌ **System Error during Stats generation:**\n\n<code>{ex}</code>\n\n_Please check your script.py placeholders._")
 
 
 # ─────────────────────────────────────────────
@@ -261,7 +273,7 @@ async def link_generator(client, message):
 
 
 # ─────────────────────────────────────────────
-# 🎨 CENTRAL BUTTONS INLINE UI CALLBACKS
+# 🎨 CENTRAL BUTTONS INLINE UI CALLBACKS - SECURE
 # ─────────────────────────────────────────────
 @Client.on_callback_query(filters.regex(r"^(help|user_cmds|admin_cmds|stats|back_start)$"))
 async def ui_cb(client, query):
@@ -300,47 +312,52 @@ async def ui_cb(client, query):
         buttons_markup = InlineKeyboardMarkup(btn)
 
     elif data == "stats":
-        files = await db_count_documents()
-        uptime = get_readable_time(time_now() - temp.START_TIME)
-
-        # ✅ FIX: Fetch Universal Directory Stats
         try:
-            tot_dir = await actors.count_documents({})
-            app_dir = await actors.count_documents({"category": "app"})
-            web_dir = await actors.count_documents({"category": "website"})
-            act_dir = tot_dir - app_dir - web_dir
-        except:
-            tot_dir = app_dir = web_dir = act_dir = 0
-
-        dir_stats_text = f"\n\n🗂️ **Universal Directory:**\n├ 🎭 Actors: {act_dir}\n├ 📱 Apps: {app_dir}\n├ 🌐 Websites: {web_dir}\n└ 📊 Total Profiles: {tot_dir}"
-
-        if query.from_user.id in ADMINS:
-            users, chats, premium = await asyncio.gather(
-                db.total_users_count(),
-                db.total_chat_count(),
-                db.premium.count_documents({"status.premium": True})
-            )
-            text = script.STATUS_TXT.format(
-                users, chats, premium,
-                files['total'],
-                files['primary'], files['primary_thumb'],
-                files['cloud'], files['cloud_thumb'],
-                files['archive'], files['archive_thumb'],
-                files['total_thumb'], uptime
-            )
-            text += dir_stats_text
-            btn = [
-                [InlineKeyboardButton("🔄 WARMUP THUMBNAILS", callback_data="warmup_trigger_all")],
-                [InlineKeyboardButton("⬅️ Back Menu", callback_data="back_start")]
-            ]
-        else:
-            text = script.USER_STATUS_TXT.format(
-                files['total'], files['primary'], files['cloud'], files['archive'], uptime
-            )
-            text += dir_stats_text
-            btn = [[InlineKeyboardButton("⬅️ Back Menu", callback_data="back_start")]]
+            try: files = await db_count_documents()
+            except: files = {}
+            f = files if isinstance(files, dict) else {}
             
-        buttons_markup = InlineKeyboardMarkup(btn)
+            uptime = get_readable_time(time_now() - temp.START_TIME)
+
+            try:
+                tot_dir = await actors.count_documents({})
+                app_dir = await actors.count_documents({"category": "app"})
+                web_dir = await actors.count_documents({"category": "website"})
+                act_dir = tot_dir - app_dir - web_dir
+            except:
+                tot_dir = app_dir = web_dir = act_dir = 0
+
+            if query.from_user.id in ADMINS:
+                try: users = await db.total_users_count()
+                except: users = 0
+                try: chats = await db.total_chat_count()
+                except: chats = 0
+                try: premium = await db.premium.count_documents({"status.premium": True})
+                except: premium = 0
+
+                text = script.STATUS_TXT.format(
+                    users, chats, premium,
+                    f.get('total',0),
+                    f.get('primary',0), f.get('primary_thumb',0),
+                    f.get('cloud',0), f.get('cloud_thumb',0),
+                    f.get('archive',0), f.get('archive_thumb',0),
+                    tot_dir, act_dir, app_dir, web_dir,
+                    f.get('total_thumb',0), uptime
+                )
+                btn = [
+                    [InlineKeyboardButton("🔄 WARMUP THUMBNAILS", callback_data="warmup_trigger_all")],
+                    [InlineKeyboardButton("⬅️ Back Menu", callback_data="back_start")]
+                ]
+            else:
+                text = script.USER_STATUS_TXT.format(
+                    f.get('total',0), f.get('primary',0), f.get('cloud',0), f.get('archive',0),
+                    tot_dir, act_dir, app_dir, web_dir, uptime
+                )
+                btn = [[InlineKeyboardButton("⬅️ Back Menu", callback_data="back_start")]]
+                
+            buttons_markup = InlineKeyboardMarkup(btn)
+        except Exception as ex:
+            return await query.answer(f"❌ Error displaying stats: {ex}", show_alert=True)
 
     try:
         await query.message.edit_caption(
@@ -400,7 +417,6 @@ async def close_cb(c, q):
         chat_id = q.message.chat.id
         current_msg_id = q.message.id
 
-        # ✅ BUG FIX: यहाँ भी ब्लाइंड -1/+1 को हटाकर सिर्फ टारगेटेड मैसेज साफ किए गए
         msg_ids_to_clean = [current_msg_id]
         if q.message.reply_to_message:
             msg_ids_to_clean.append(q.message.reply_to_message.id)
